@@ -1,0 +1,5 @@
+.mouse-cursor-shape {
+    /* Cairo does the actual drawing; this just gives it a soft shadow
+       so it reads clearly against any background/app underneath. */
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
