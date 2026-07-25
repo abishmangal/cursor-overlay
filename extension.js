@@ -16,31 +16,12 @@ const NEUTRAL = [1, 1, 1, 0.12];
 const OUTLINE = [1, 1, 1, 0.9];
 const BASE_FILL = [0.08, 0.08, 0.08, 0.35];
 
-// Full rounded-rect path (used for the small scroll-wheel notch, where
-// no corner needs to be a sharp "tip").
 function roundedRectPath(cr, x, y, w, h, r) {
     cr.newSubPath();
     cr.arc(x + w - r, y + r, r, -Math.PI / 2, 0);
     cr.arc(x + w - r, y + h - r, r, 0, Math.PI / 2);
     cr.arc(x + r, y + h - r, r, Math.PI / 2, Math.PI);
     cr.arc(x + r, y + r, r, Math.PI, 3 * Math.PI / 2);
-    cr.closePath();
-}
-
-// Same rounded body, but the top-left corner is left sharp so it reads
-// as a pointer tip. That corner sits at local (0,0), which is also the
-// actor's rotation pivot -- so it stays glued to the real cursor
-// position at any rotation angle.
-function cursorBodyPath(cr, x, y, w, h, r) {
-    cr.newSubPath();
-    cr.moveTo(x, y);                                     // sharp tip
-    cr.lineTo(x + w - r, y);
-    cr.arc(x + w - r, y + r, r, -Math.PI / 2, 0);         // top-right
-    cr.lineTo(x + w, y + h - r);
-    cr.arc(x + w - r, y + h - r, r, 0, Math.PI / 2);      // bottom-right
-    cr.lineTo(x + r, y + h);
-    cr.arc(x + r, y + h - r, r, Math.PI / 2, Math.PI);    // bottom-left
-    cr.lineTo(x, y);                                       // back to tip
     cr.closePath();
 }
 
@@ -56,10 +37,10 @@ class MouseCursor {
         });
         this._area.set_size(CURSOR_WIDTH, CURSOR_HEIGHT);
 
-        // Pivot at the actor's own top-left corner (fraction 0,0) --
-        // this is also where the sharp "tip" is drawn, so rotating
-        // never displaces it from the real pointer position.
-        this._area.set_pivot_point(0, 0);
+        // Pivot at the top-center of the shape (fraction 0.5, 0) --
+        // that's the top end of the left/right button divider line,
+        // and it's what we want glued to the real pointer position.
+        this._area.set_pivot_point(0.5, 0);
         this._area.rotation_angle_z = CURSOR_ROTATION_DEG;
 
         this._repaintId = this._area.connect('repaint', this._onRepaint.bind(this));
@@ -70,7 +51,9 @@ class MouseCursor {
     }
 
     setPosition(x, y) {
-        this._area.set_position(x, y);
+        // Actor position is its top-left corner; shift left by half the
+        // width so the pivot (top-center) lands exactly on (x, y).
+        this._area.set_position(x - CURSOR_WIDTH / 2, y);
     }
 
     setPressedButton(button) {
@@ -87,7 +70,7 @@ class MouseCursor {
         const h = height - 1;
         const buttonAreaHeight = h * 0.55;
 
-        cursorBodyPath(cr, 0, 0, w, h, CORNER_RADIUS);
+        roundedRectPath(cr, 0, 0, w, h, CORNER_RADIUS);
         cr.clipPreserve();
 
         cr.setSourceRGBA(...BASE_FILL);
@@ -105,7 +88,7 @@ class MouseCursor {
         cr.setSourceRGBA(...(this._pressedButton === Clutter.BUTTON_MIDDLE ? ACCENT : NEUTRAL));
         cr.fill();
 
-        cursorBodyPath(cr, 0, 0, w, h, CORNER_RADIUS);
+        roundedRectPath(cr, 0, 0, w, h, CORNER_RADIUS);
         cr.setSourceRGBA(...OUTLINE);
         cr.setLineWidth(1.5);
         cr.stroke();
@@ -168,16 +151,17 @@ export default class CursorOverlayExtension extends Extension {
         const [x, y, mods] = global.get_pointer();
         this._cursor.setPosition(x, y);
 
-        // NOTE: on some systems BUTTON1/BUTTON2 map to left/middle,
-        // on others it's flipped -- if left/middle ever swap again,
-        // swap these two lines back.
+        // On this system: BUTTON1_MASK = left, BUTTON2_MASK = right,
+        // BUTTON3_MASK = middle (2 and 3 are swapped from the usual
+        // convention). If this ever changes on another machine, swap
+        // the BUTTON2_MASK / BUTTON3_MASK lines below.
         let pressedButton = null;
         if (mods & Clutter.ModifierType.BUTTON1_MASK)
-            pressedButton = Clutter.BUTTON_MIDDLE;
-        else if (mods & Clutter.ModifierType.BUTTON2_MASK)
             pressedButton = Clutter.BUTTON_PRIMARY;
-        else if (mods & Clutter.ModifierType.BUTTON3_MASK)
+        else if (mods & Clutter.ModifierType.BUTTON2_MASK)
             pressedButton = Clutter.BUTTON_SECONDARY;
+        else if (mods & Clutter.ModifierType.BUTTON3_MASK)
+            pressedButton = Clutter.BUTTON_MIDDLE;
 
         this._cursor.setPressedButton(pressedButton);
 
