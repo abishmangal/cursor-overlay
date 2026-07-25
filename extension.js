@@ -148,6 +148,16 @@ export default class CursorOverlayExtension extends Extension {
     }
 
     _onPoll() {
+        // The panel and things like the Quick Settings menu get added
+        // to the same chrome layer as our cursor, but potentially
+        // *after* it (e.g. any popup menu opened post-enable()), and
+        // later-added children paint on top in Clutter. Re-raising
+        // every tick keeps us above all of that regardless of when
+        // it appeared.
+        const parent = this._cursor.actor.get_parent();
+        if (parent)
+            parent.set_child_above_sibling(this._cursor.actor, null);
+
         const [x, y, mods] = global.get_pointer();
         this._cursor.setPosition(x, y);
 
