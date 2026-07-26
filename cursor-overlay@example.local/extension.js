@@ -1,4 +1,5 @@
 import Clutter from 'gi://Clutter';
+import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import St from 'gi://St';
 
@@ -10,6 +11,9 @@ const CURSOR_HEIGHT = 38;
 const CORNER_RADIUS = 9;
 const CURSOR_ROTATION_DEG = -25; // classic arrow-cursor-like slant
 const POLL_INTERVAL_MS = 16; // ~60fps
+
+const INTERFACE_SCHEMA = 'org.gnome.desktop.interface';
+const BLANK_CURSOR_THEME = 'cursor-overlay-blank';
 
 const ACCENT = [0.20, 0.52, 0.89, 0.95]; // GNOME blue
 const NEUTRAL = [1, 1, 1, 0.12];
@@ -117,13 +121,14 @@ export default class CursorOverlayExtension extends Extension {
             this._onPoll.bind(this)
         );
 
-        try {
-            global.stage.hide_cursor();
-            this._hidCursor = true;
-        } catch (e) {
-            log(`[Cursor Overlay] Could not hide system cursor: ${e}`);
-            this._hidCursor = false;
-        }
+        this._settings = this.getSettings();
+        this._interfaceSettings = new Gio.Settings({schema: INTERFACE_SCHEMA});
+        this._originalCursorTheme = null;
+        this._settingsChangedId = this._settings.connect(
+            'changed::hide-system-cursor',
+            () => this._updateSystemCursorVisibility()
+        );
+        this._updateSystemCursorVisibility();
     }
 
     disable() {
@@ -132,19 +137,51 @@ export default class CursorOverlayExtension extends Extension {
             this._pollId = null;
         }
 
-        if (this._hidCursor) {
-            try {
-                global.stage.show_cursor();
-            } catch (e) {
-                log(`[Cursor Overlay] Could not restore system cursor: ${e}`);
-            }
-            this._hidCursor = false;
+        if (this._settingsChangedId) {
+            this._settings.disconnect(this._settingsChangedId);
+            this._settingsChangedId = null;
         }
+        this._settings = null;
+
+        // Always restore the original cursor theme on disable, regardless
+        // of the current toggle state, so we never leave the user stuck
+        // with the blank one.
+        this._restoreCursorTheme();
+        this._interfaceSettings = null;
 
         if (this._cursor) {
             this._cursor.destroy();
             this._cursor = null;
         }
+    }
+
+    // Swapping org.gnome.desktop.interface's cursor-theme is a public,
+    // stable API respected by every app and GNOME version -- unlike the
+    // private compositor cursor-visibility calls, which vary (and
+    // sometimes vanish) between Mutter releases. Requires the blank
+    // theme to be installed first via install-blank-cursor-theme.sh.
+    _applyBlankCursorTheme() {
+        if (this._originalCursorTheme !== null)
+            return; // already applied
+
+        const current = this._interfaceSettings.get_string('cursor-theme');
+        this._originalCursorTheme = current || 'Adwaita';
+        this._interfaceSettings.set_string('cursor-theme', BLANK_CURSOR_THEME);
+    }
+
+    _restoreCursorTheme() {
+        if (this._originalCursorTheme === null)
+            return;
+        this._interfaceSettings.set_string('cursor-theme', this._originalCursorTheme);
+        this._originalCursorTheme = null;
+    }
+
+    _updateSystemCursorVisibility() {
+        const hide = this._settings.get_boolean('hide-system-cursor');
+        if (hide)
+            this._applyBlankCursorTheme();
+        else
+            this._restoreCursorTheme();
     }
 
     _onPoll() {

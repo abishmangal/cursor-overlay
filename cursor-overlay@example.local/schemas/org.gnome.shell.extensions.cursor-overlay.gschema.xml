@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.cursor-overlay" path="/org/gnome/shell/extensions/cursor-overlay/">
+    <key name="hide-system-cursor" type="b">
+      <default>false</default>
+      <summary>Hide system cursor</summary>
+      <description>
+        Attempt to hide the real OS pointer so only the custom cursor
+        overlay is visible. Support for this can vary by GNOME/Mutter
+        version, so it's kept as an opt-in toggle rather than always on.
+      </description>
+    </key>
+  </schema>
+</schemalist>

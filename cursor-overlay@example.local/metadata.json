@@ -4,5 +4,6 @@
     "description": "Shows click ripple animations and pressed keys near the cursor",
     "shell-version": ["45", "46", "47", "48"],
     "url": "",
-    "version": 1
+    "version": 1,
+    "settings-schema": "org.gnome.shell.extensions.cursor-overlay"
 }
