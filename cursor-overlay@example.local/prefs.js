@@ -34,6 +34,25 @@ export default class CursorOverlayPreferences extends ExtensionPreferences {
             Gio.SettingsBindFlags.DEFAULT
         );
 
+        const sizeRow = new Adw.SpinRow({
+            title: 'Cursor size',
+            subtitle: 'Percentage of the default size',
+            adjustment: new Gtk.Adjustment({
+                lower: 50,
+                upper: 200,
+                step_increment: 5,
+                page_increment: 25,
+            }),
+        });
+        group.add(sizeRow);
+
+        settings.bind(
+            'cursor-scale',
+            sizeRow,
+            'value',
+            Gio.SettingsBindFlags.DEFAULT
+        );
+
         window.add(page);
     }
 }

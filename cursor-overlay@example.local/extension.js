@@ -7,10 +7,14 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 const CURSOR_WIDTH = 26;
-const CURSOR_HEIGHT = 38;
+const CURSOR_BODY_HEIGHT = 38;
+const ARROW_HEIGHT = 6;
+const ARROW_HALF_WIDTH = 3;
+const CURSOR_HEIGHT = CURSOR_BODY_HEIGHT + ARROW_HEIGHT;
 const CORNER_RADIUS = 9;
 const CURSOR_ROTATION_DEG = -25; // classic arrow-cursor-like slant
 const POLL_INTERVAL_MS = 16; // ~60fps
+const DEFAULT_CURSOR_SCALE_PCT = 100;
 
 const INTERFACE_SCHEMA = 'org.gnome.desktop.interface';
 const BLANK_CURSOR_THEME = 'cursor-overlay-blank';
@@ -46,6 +50,8 @@ class MouseCursor {
         // and it's what we want glued to the real pointer position.
         this._area.set_pivot_point(0.5, 0);
         this._area.rotation_angle_z = CURSOR_ROTATION_DEG;
+        this._area.scale_x = DEFAULT_CURSOR_SCALE_PCT / 100;
+        this._area.scale_y = DEFAULT_CURSOR_SCALE_PCT / 100;
 
         this._repaintId = this._area.connect('repaint', this._onRepaint.bind(this));
     }
@@ -60,6 +66,15 @@ class MouseCursor {
         this._area.set_position(x - CURSOR_WIDTH / 2, y);
     }
 
+    setScale(percent) {
+        // Scaling happens around the same pivot used for rotation
+        // (top-center, where the arrowhead tip sits), so the hotspot
+        // stays glued to the real cursor position at any size.
+        const scale = percent / 100;
+        this._area.scale_x = scale;
+        this._area.scale_y = scale;
+    }
+
     setPressedButton(button) {
         if (this._pressedButton === button)
             return;
@@ -69,30 +84,42 @@ class MouseCursor {
 
     _onRepaint(area) {
         const cr = area.get_context();
-        const [width, height] = area.get_surface_size();
-        const w = width - 1;
-        const h = height - 1;
+        const [totalWidth, totalHeight] = area.get_surface_size();
+        const bodyTop = ARROW_HEIGHT;
+        const w = totalWidth - 1;
+        const h = totalHeight - bodyTop - 1;
         const buttonAreaHeight = h * 0.55;
 
-        roundedRectPath(cr, 0, 0, w, h, CORNER_RADIUS);
+        // Arrowhead: apex sits exactly at (totalWidth / 2, 0), which is
+        // also the pivot point and therefore the real click location --
+        // this is what makes it usable as an accuracy reference rather
+        // than just decoration.
+        cr.moveTo(totalWidth / 2, 0);
+        cr.lineTo(totalWidth / 2 - ARROW_HALF_WIDTH, ARROW_HEIGHT);
+        cr.lineTo(totalWidth / 2 + ARROW_HALF_WIDTH, ARROW_HEIGHT);
+        cr.closePath();
+        cr.setSourceRGBA(...(this._pressedButton !== null ? ACCENT : OUTLINE));
+        cr.fill();
+
+        roundedRectPath(cr, 0, bodyTop, w, h, CORNER_RADIUS);
         cr.clipPreserve();
 
         cr.setSourceRGBA(...BASE_FILL);
         cr.fill();
 
-        cr.rectangle(0, 0, w / 2, buttonAreaHeight);
+        cr.rectangle(0, bodyTop, w / 2, buttonAreaHeight);
         cr.setSourceRGBA(...(this._pressedButton === Clutter.BUTTON_PRIMARY ? ACCENT : NEUTRAL));
         cr.fill();
 
-        cr.rectangle(w / 2, 0, w / 2, buttonAreaHeight);
+        cr.rectangle(w / 2, bodyTop, w / 2, buttonAreaHeight);
         cr.setSourceRGBA(...(this._pressedButton === Clutter.BUTTON_SECONDARY ? ACCENT : NEUTRAL));
         cr.fill();
 
-        roundedRectPath(cr, w / 2 - 2, 4, 4, 11, 2);
+        roundedRectPath(cr, w / 2 - 2, bodyTop + 4, 4, 11, 2);
         cr.setSourceRGBA(...(this._pressedButton === Clutter.BUTTON_MIDDLE ? ACCENT : NEUTRAL));
         cr.fill();
 
-        roundedRectPath(cr, 0, 0, w, h, CORNER_RADIUS);
+        roundedRectPath(cr, 0, bodyTop, w, h, CORNER_RADIUS);
         cr.setSourceRGBA(...OUTLINE);
         cr.setLineWidth(1.5);
         cr.stroke();
@@ -123,12 +150,16 @@ export default class CursorOverlayExtension extends Extension {
 
         this._settings = this.getSettings();
         this._interfaceSettings = new Gio.Settings({schema: INTERFACE_SCHEMA});
-        this._originalCursorTheme = null;
         this._settingsChangedId = this._settings.connect(
             'changed::hide-system-cursor',
             () => this._updateSystemCursorVisibility()
         );
+        this._scaleChangedId = this._settings.connect(
+            'changed::cursor-scale',
+            () => this._updateCursorScale()
+        );
         this._updateSystemCursorVisibility();
+        this._updateCursorScale();
     }
 
     disable() {
@@ -141,12 +172,25 @@ export default class CursorOverlayExtension extends Extension {
             this._settings.disconnect(this._settingsChangedId);
             this._settingsChangedId = null;
         }
-        this._settings = null;
+        if (this._scaleChangedId) {
+            this._settings.disconnect(this._scaleChangedId);
+            this._scaleChangedId = null;
+        }
 
-        // Always restore the original cursor theme on disable, regardless
-        // of the current toggle state, so we never leave the user stuck
-        // with the blank one.
-        this._restoreCursorTheme();
+        // Always restore the real cursor theme on disable, regardless of
+        // the current toggle state, so we never leave the user stuck
+        // with the blank one. Reads the actual current state rather than
+        // memory, and falls back to the persisted saved theme (or
+        // Adwaita) if we're recovering from a previous unclean exit.
+        if (this._interfaceSettings) {
+            const current = this._interfaceSettings.get_string('cursor-theme');
+            if (current === BLANK_CURSOR_THEME) {
+                const saved = this._settings ? this._settings.get_string('saved-cursor-theme') : '';
+                this._interfaceSettings.set_string('cursor-theme', saved || 'Adwaita');
+            }
+        }
+
+        this._settings = null;
         this._interfaceSettings = null;
 
         if (this._cursor) {
@@ -160,28 +204,30 @@ export default class CursorOverlayExtension extends Extension {
     // private compositor cursor-visibility calls, which vary (and
     // sometimes vanish) between Mutter releases. Requires the blank
     // theme to be installed first via install-blank-cursor-theme.sh.
-    _applyBlankCursorTheme() {
-        if (this._originalCursorTheme !== null)
-            return; // already applied
-
-        const current = this._interfaceSettings.get_string('cursor-theme');
-        this._originalCursorTheme = current || 'Adwaita';
-        this._interfaceSettings.set_string('cursor-theme', BLANK_CURSOR_THEME);
-    }
-
-    _restoreCursorTheme() {
-        if (this._originalCursorTheme === null)
-            return;
-        this._interfaceSettings.set_string('cursor-theme', this._originalCursorTheme);
-        this._originalCursorTheme = null;
-    }
-
+    //
+    // The "real" theme is persisted to a GSettings key rather than kept
+    // only in memory, so recovery survives crashes, forced logouts, or
+    // anything else that skips a clean disable() while the blank theme
+    // is active -- otherwise a future session has no way to know what
+    // to restore, and the cursor stays stuck invisible forever.
     _updateSystemCursorVisibility() {
+        const current = this._interfaceSettings.get_string('cursor-theme');
+        if (current !== BLANK_CURSOR_THEME)
+            this._settings.set_string('saved-cursor-theme', current);
+
         const hide = this._settings.get_boolean('hide-system-cursor');
-        if (hide)
-            this._applyBlankCursorTheme();
-        else
-            this._restoreCursorTheme();
+        if (hide) {
+            this._interfaceSettings.set_string('cursor-theme', BLANK_CURSOR_THEME);
+        } else if (current === BLANK_CURSOR_THEME) {
+            // Stuck blank from a previous unclean exit -- self-heal.
+            const saved = this._settings.get_string('saved-cursor-theme');
+            this._interfaceSettings.set_string('cursor-theme', saved || 'Adwaita');
+        }
+    }
+
+    _updateCursorScale() {
+        const percent = this._settings.get_int('cursor-scale');
+        this._cursor.setScale(percent);
     }
 
     _onPoll() {

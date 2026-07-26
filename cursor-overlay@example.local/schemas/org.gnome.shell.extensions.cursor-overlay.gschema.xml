@@ -10,5 +10,15 @@
         version, so it's kept as an opt-in toggle rather than always on.
       </description>
     </key>
+    <key name="cursor-scale" type="i">
+      <default>100</default>
+      <range min="50" max="200"/>
+      <summary>Cursor size</summary>
+      <description>
+        Size of the custom cursor overlay, as a percentage of its
+        default size. Scaling happens around the cursor's hotspot, so
+        click accuracy is unaffected by size.
+      </description>
+    </key>
   </schema>
 </schemalist>
